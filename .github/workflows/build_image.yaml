@@ -1,15 +1,60 @@
-name: Build Multi-arch Image
+name: Build Multi-arch Image using matrix
 
-on: [push, workflow_dispatch]
+on: [workflow_dispatch, pull_request ]
+
+env:
+  DEFAULT_BUILDER_TAG: cache
 
 jobs:
+  set-environment:
+    name: Set environment variables
+    runs-on: ubuntu-latest
+    outputs:
+      build-builder-image: ${{ steps.set-env.outputs.build-builder-image }}
+      collector-builder-tag: ${{ steps.set-env.outputs.collector-builder-tag }}
+
+    steps:
+      - name: Checks PR, main and release branches
+        id: set-env
+        run: |
+          if [[ "${{ github.event_name != 'pull_request' }}" ]]; then
+            echo 'build-builder-image=true' >> "$GITHUB_OUTPUT"
+            echo "collector-builder-tag=${DEFAULT_BUILDER_TAG}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name == 'pull_request' }}" ]]; then
+            #We have 2 options:
+            #- We build the builder from scratch and give it a custom tag
+            #- We use the existing cache
+            COLLECTOR_BUILDER_TAG="${DEFAULT_BUILDER_TAG}"
+            if [[ "${{ contains(github.event.pull_request.labels.*.name, 'build-builder-image') }}" == "true" ]]; then
+              COLLECTOR_BUILDER_TAG="latest"
+              echo 'build-builder-image=true' >> "$GITHUB_OUTPUT"
+            fi
+            echo "collector-builder-tag=$COLLECTOR_BUILDER_TAG" >> "$GITHUB_OUTPUT"
+            echo "COLLECTOR_APPEND_CID=true" >> "$GITHUB_ENV"
+            if [[ "${{ contains(github.event.pull_request.labels.*.name, 'address-sanitizer') }}" == "true" ]]; then
+              echo "ADDRESS_SANITIZER=true" >> "$GITHUB_ENV"
+            fi
+          fi
+  
   build:
+    needs: set-environment
     strategy:
       matrix:
           ARCH: [linux/ppc64le, linux/amd64]
+    
+    env:
+      TAG: "${{ matrix.ARCH }} === 'linux/ppc64le' && 'ppc64le' || 'amd64'"
+      BUILD_BUILDER_IMAGE: ${{ needs.set-environment.outputs.build-builder-image }}
+      COLLECTOR_BUILDER_TAG: ${{ needs.set-environment.outputs.collector-builder-tag }}
+    
     name: Build image
     runs-on: ubuntu-latest
     steps:
+      - name: Log env var
+        run: |
+          echo $BUILD_BUILDER_IMAGE
+          echo $COLLECTOR_BUILDER_TAG
+    
       - name: Checkout
         uses: actions/checkout@v2
 
@@ -18,38 +63,97 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
+ 
 
-      - name: Login to container registry
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_TOKEN }}
-
-#       - name: Build and Push Image
-#         uses: docker/build-push-action@v3
-#         with:
-#           tags: multi-arch-gha:latest
-#           platforms: linux/amd64,linux/ppc64le
-#           push: false
-
-#       - name: Build and Push image
-#         run: |
+      - name: Build and Push image
+        run: |
         
-#           echo ${{ matrix.ARCH }}
+          echo ${{ matrix.ARCH }}
 
-#           if [[ "${{ matrix.ARCH }}" == "linux/ppc64le" ]]; then
-#             export TAG=ppc64le
-#           else
-#             export TAG=amd64
-#           fi
+          if [[ "${{ matrix.ARCH }}" == "linux/ppc64le" ]]; then
+            export TAG=ppc64le
+            echo "TAG=ppc64le" >> $GITHUB_ENV
+          else
+            export TAG=amd64
+            echo "TAG=amd64" >> $GITHUB_ENV
+          fi
 
-#           echo "Building for $TAG"
+          echo "Building for $TAG"
 
-#           docker buildx build --platform ${{ matrix.ARCH }} --tag mha:latest-${TAG} -f Dockerfile ..
-#           docker image ls
+          docker buildx build --load --platform ${{ matrix.ARCH }} --tag multi-arch-gha:latest-${TAG} -f Dockerfile ..
+          docker image ls
+          docker inspect multi-arch-gha:latest-${TAG} | grep Arch
+          
 
+      - name: Save image
+        run: |
+          docker save multi-arch-gha:latest-${TAG} > /tmp/img-${TAG}.tar
+          ls /tmp/
+          
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v3.1.2
+        with:
+          name: mag-img-${{ env.TAG }}
+          path: /tmp/img-${{ env.TAG }}.tar
+          
+  multi-arch-manifest:
+    needs: build
+    name: Create manifest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable insecure registry
+        run: |
+        
+          cat << EOF > ~/.docker/config.json 
+          {
+          "insecure-registries" : ["127.0.0.1:5000"]
+          }
+          EOF
+          
+          sudo systemctl daemon-reload
+          sudo systemctl reload docker
+          sudo systemctl restart docker
+    
+      - name: Download PPC Build Artifact
+        uses: actions/download-artifact@v2.1.1
+        with:
+          name: mag-img-ppc64le
+          path: /tmp/img-ppc64le
+          
+      - name: Download AMD Build Artifact
+        uses: actions/download-artifact@v2.1.1
+        with:
+          name: mag-img-amd64
+          path: /tmp/img-amd64
+      
       - name: Load image into docker daemon
         run: |
-          docker buildx build --load --platform ${{ matrix.ARCH }} -t multi-arch-gha:latest .
-          docker image ls
-          docker inspect multi-arch-gha:latest | grep Arch
+          ls -lha /tmp/img-ppc64le/
+          
+          docker load --input /tmp/img-amd64/img-amd64.tar
+          docker load --input /tmp/img-ppc64le/img-ppc64le.tar
+          docker image ls -a
+          
+          docker inspect multi-arch-gha:latest-ppc64le | grep Arch
+          docker inspect multi-arch-gha:latest-amd64 | grep Arch
+          
+          
+          echo "Testing registry"
+          status_code=$(curl -I -k -s localhost:5000/ | head -n 1 | cut -d ' ' -f 2)
+          if [[ "$status_code" == "200" ]]; then
+              echo "Registry is up"
+          fi
+
+          
+      - name: Create manifest
+        run: |
+          docker manifest create --insecure localhost:5000/kodlekereanup/multi-arch-gha:latest --amend localhost:5000/multi-arch-gha:latest-ppc64le --amend localhost:5000/multi-arch-gha:latest-amd64 
+          docker manifest inspect localhost:5000/kodlekereanup/multi-arch-gha:latest
+          
+    
+      
