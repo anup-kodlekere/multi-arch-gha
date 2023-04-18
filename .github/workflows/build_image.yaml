@@ -42,7 +42,7 @@ jobs:
       matrix:
           ARCH: [linux/ppc64le, linux/amd64]
           exclude:
-            - if: "${{ needs.set-environment.outputs.build-builder-image }}" == 'true'
+            - if: "${{ needs.set-environment.outputs.build-builder-image }}"
               ARCH: linux/ppc64le
     
     env:
