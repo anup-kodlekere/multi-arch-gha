@@ -41,9 +41,11 @@ jobs:
     strategy:
       matrix:
           ARCH: [linux/ppc64le, linux/amd64]
+          shouldRelease:
+          - ${{ contains(github.event.pull_request.labels.*.name, 'build-builder-image') }}
           exclude:
-            - if: "${{ needs.set-environment.outputs.build-builder-image }}"
-              ARCH: linux/ppc64le
+              - shouldRelease: true
+                ARCH: linux/ppc64le
     
     env:
       TAG: "${{ matrix.ARCH }} === 'linux/ppc64le' && 'ppc64le' || 'amd64'"
