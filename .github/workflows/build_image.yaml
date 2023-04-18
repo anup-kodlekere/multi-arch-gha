@@ -17,10 +17,10 @@ jobs:
       - name: Checks PR, main and release branches
         id: set-env
         run: |
-          if [[ "${{ github.event_name != 'pull_request' }}" ]]; then
+          if [[ "${{ github.event_name }}" != 'pull_request' ]]; then
             echo 'build-builder-image=true' >> "$GITHUB_OUTPUT"
             echo "collector-builder-tag=${DEFAULT_BUILDER_TAG}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.event_name == 'pull_request' }}" ]]; then
+          else
             #We have 2 options:
             #- We build the builder from scratch and give it a custom tag
             #- We use the existing cache
@@ -41,6 +41,9 @@ jobs:
     strategy:
       matrix:
           ARCH: [linux/ppc64le, linux/amd64]
+          exclude:
+            - if: ${{ needs.set-environment.outputs.build-builder-image }}
+              ARCH: linux/ppc64le
     
     env:
       TAG: "${{ matrix.ARCH }} === 'linux/ppc64le' && 'ppc64le' || 'amd64'"
