@@ -6,14 +6,18 @@ jobs:
   build:
     name: Build image
     runs-on: ubuntu-latest
-    services:
-      registry:
-        image: registry:2
-        ports:
-          - 5000:5000
+        
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+        
+      - name: executing remote ssh commands using password
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.REMOTE_PPC_NODE }}
+          key: ${{ secrets.REMOTE_PPC_NODE_KEY }}
+          script: |
+            hostname
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
