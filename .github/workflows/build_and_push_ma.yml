@@ -15,6 +15,7 @@ jobs:
         uses: appleboy/ssh-action@v0.1.10
         with:
           host: ${{ secrets.REMOTE_PPC_NODE }}
+          username: ubuntu
           key: ${{ secrets.REMOTE_PPC_NODE_KEY }}
           script: |
             hostname
