@@ -1,6 +1,7 @@
 BASE_PATH = .
 
 NPROCS ?= $(shell nproc)
+ARCH ?= amd64
 
 .PHONY: builder
 builder:
